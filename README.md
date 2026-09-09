@@ -337,6 +337,7 @@ aws budgets create-budget --account-id <ACCOUNT_ID> \
 | `client:` and `host:` events look identical | The payload's `notif_type` is the short slug with no context prefix, so the two are indistinguishable in the embed. Vast's fix is a dedicated webhook per context — subscribe a second webhook and point it at a different Discord channel. |
 | Deliveries stop after changing the endpoint URL | Redirects count as *permanent* delivery failures. Update the URL in the Vast console rather than redirecting the old one. |
 | A message arrives with no timestamp | The payload's `timestamp` was outside years 0000-9999, so the embed field was omitted rather than sending a date Discord would reject. |
+| `sam build` fails with `Cannot find esbuild` | `esbuild` must live in `dependencies`, not `devDependencies` — a [known `aws-sam-cli` bug](https://github.com/aws/aws-sam-cli/issues/4183) means the esbuild `BuildMethod` never checks `devDependencies`. It's still never bundled into the deployed artifact either way, since the Lambda code never imports it. |
 
 Logs are one structured JSON line per request. The notification's subject and message are
 deliberately omitted — they're the content of the alert itself.
@@ -356,7 +357,7 @@ src/
   discord.ts     POSTs to Discord; never throws; redacts the URL from errors
   config.ts      env-or-SSM secret loading, cached per execution environment
   types.ts
-tests/unit/      91 tests, no AWS and no network
+tests/unit/      106 tests, no AWS and no network
 scripts/         sign-payload.ts — signs requests the way Vast does
 events/          sample Vast payloads
 template.yaml    SAM infrastructure
