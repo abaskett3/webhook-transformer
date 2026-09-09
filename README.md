@@ -180,8 +180,8 @@ aws iam create-open-id-connect-provider \
 No thumbprint is needed. AWS verifies the JWKS endpoint's TLS certificate against its own trusted
 root CA library and only falls back to thumbprints for providers using an untrusted CA.
 
-**2. Create a role only this repo's `main` branch can assume.** Save as `trust-policy.json`,
-replacing `<ACCOUNT_ID>` and `<GITHUB_USERNAME>`:
+**2. Create a role only this repo's `production` environment can assume.** Save as
+`trust-policy.json`, replacing `<ACCOUNT_ID>`, `<GITHUB_USERNAME>`, and `<GITHUB_REPO>`:
 
 ```json
 {
@@ -196,7 +196,7 @@ replacing `<ACCOUNT_ID>` and `<GITHUB_USERNAME>`:
       "Condition": {
         "StringEquals": {
           "token.actions.githubusercontent.com:aud": "sts.amazonaws.com",
-          "token.actions.githubusercontent.com:sub": "repo:<GITHUB_USERNAME>/vast-webhook-transformer:ref:refs/heads/main"
+          "token.actions.githubusercontent.com:sub": "repo:<GITHUB_USERNAME>/<GITHUB_REPO>:environment:production"
         }
       }
     }
@@ -205,12 +205,41 @@ replacing `<ACCOUNT_ID>` and `<GITHUB_USERNAME>`:
 ```
 
 The `sub` condition is the security boundary that matters. Keep it exact — a `StringLike` wildcard
-such as `repo:<you>/<repo>:*` would let *any* branch or PR in the repo assume the role, which means
-anyone who can open a PR can deploy.
+such as `repo:<you>/<repo>:*` would let *any* branch, PR, or environment in the repo assume the role,
+which means anyone who can open a PR can deploy.
+
+> **Two non-obvious gotchas, found by working through actual `AssumeRoleWithWebIdentity` failures:**
+>
+> 1. **The claim is `environment:production`, not `ref:refs/heads/main`.** [deploy.yml](.github/workflows/deploy.yml)'s
+>    job sets `environment: production`. GitHub's own docs note that once a job specifies an
+>    `environment:`, the OIDC token's `sub` claim switches shape from `repo:OWNER/REPO:ref:refs/heads/BRANCH`
+>    to `repo:OWNER/REPO:environment:ENVIRONMENT_NAME` — a trust policy written for the branch-ref
+>    form will reject every token, with the unhelpful generic error
+>    `Not authorized to perform sts:AssumeRoleWithWebIdentity` (AWS doesn't distinguish "role not
+>    found" from "condition didn't match" in that message).
+> 2. **New repos get numeric IDs baked into the claim.** As of July 15, 2026, GitHub issues OIDC
+>    tokens for newly-created repos in an immutable-ID format that embeds the org's and repo's
+>    permanent numeric IDs: `repo:OWNER@ORG_ID/REPO@REPO_ID:environment:production` — not the plain
+>    `repo:OWNER/REPO:environment:production` shown above. This repo is on the new format, so the
+>    working `sub` value here is actually:
+>    ```
+>    repo:abaskett3@10681302/webhook-transformer@1362037256:environment:production
+>    ```
+>    Find your own numeric IDs from a *failed* assume-role attempt (`aws cloudtrail lookup-events
+>    --lookup-attributes AttributeKey=EventName,AttributeValue=AssumeRoleWithWebIdentity` — the
+>    denied event's `userIdentity.principalId` contains the literal claim GitHub sent), or from the
+>    GitHub API (`GET /repos/{owner}/{repo}` and `GET /users/{owner}` for their respective `id`
+>    fields). Don't wildcard the numeric ID away with `StringLike` just to avoid looking it up — that
+>    throws away the exact security property (immunity to org/repo-rename hijacking) this format
+>    exists to provide.
+>
+> Also note: **the GitHub repo name is `webhook-transformer`**, not `vast-webhook-transformer`. The
+> CloudFormation stack, SSM parameter paths, and log group below all use `vast-webhook-transformer`
+> as an internal project name — the two are independent and don't need to match.
 
 ```bash
 aws iam create-role \
-  --role-name gha-vast-webhook-deploy \
+  --role-name gh-vast-webhook-deploy \
   --assume-role-policy-document file://trust-policy.json
 ```
 
@@ -223,7 +252,7 @@ needs, and to treat the trust policy above as the real control:
 
 ```bash
 aws iam attach-role-policy \
-  --role-name gha-vast-webhook-deploy \
+  --role-name gh-vast-webhook-deploy \
   --policy-arn arn:aws:iam::aws:policy/PowerUserAccess
 ```
 
@@ -263,7 +292,7 @@ CloudFormation, S3, Lambda, API Gateway, and Logs actions `sam deploy` uses.
 **4. Tell the repo about the role:**
 
 ```bash
-gh secret set AWS_DEPLOY_ROLE_ARN --body 'arn:aws:iam::<ACCOUNT_ID>:role/gha-vast-webhook-deploy'
+gh secret set AWS_DEPLOY_ROLE_ARN --body 'arn:aws:iam::<ACCOUNT_ID>:role/gh-vast-webhook-deploy'
 ```
 
 The region is not a workflow variable. `sam deploy` reads it from
@@ -337,6 +366,8 @@ aws budgets create-budget --account-id <ACCOUNT_ID> \
 | `client:` and `host:` events look identical | The payload's `notif_type` is the short slug with no context prefix, so the two are indistinguishable in the embed. Vast's fix is a dedicated webhook per context — subscribe a second webhook and point it at a different Discord channel. |
 | Deliveries stop after changing the endpoint URL | Redirects count as *permanent* delivery failures. Update the URL in the Vast console rather than redirecting the old one. |
 | A message arrives with no timestamp | The payload's `timestamp` was outside years 0000-9999, so the embed field was omitted rather than sending a date Discord would reject. |
+| `sam build` fails with `Cannot find esbuild` | `esbuild` must live in `dependencies`, not `devDependencies` — a [known `aws-sam-cli` bug](https://github.com/aws/aws-sam-cli/issues/4183) means the esbuild `BuildMethod` never checks `devDependencies`. It's still never bundled into the deployed artifact either way, since the Lambda code never imports it. |
+| Deploy fails at `configure-aws-credentials` with `Not authorized to perform sts:AssumeRoleWithWebIdentity` | The role's trust policy `sub` condition doesn't match what GitHub actually sent. This message is identical whether the role doesn't exist, the ARN is wrong, or the condition just doesn't match — check CloudTrail (`AssumeRoleWithWebIdentity` events) for the real `userIdentity.principalId` GitHub presented rather than guessing. See the two gotchas under "One-time OIDC setup for deploys" above — the `environment:` claim shape and GitHub's numeric-ID format for new repos are the two causes actually hit while setting this up. |
 
 Logs are one structured JSON line per request. The notification's subject and message are
 deliberately omitted — they're the content of the alert itself.
@@ -356,7 +387,7 @@ src/
   discord.ts     POSTs to Discord; never throws; redacts the URL from errors
   config.ts      env-or-SSM secret loading, cached per execution environment
   types.ts
-tests/unit/      91 tests, no AWS and no network
+tests/unit/      106 tests, no AWS and no network
 scripts/         sign-payload.ts — signs requests the way Vast does
 events/          sample Vast payloads
 template.yaml    SAM infrastructure
