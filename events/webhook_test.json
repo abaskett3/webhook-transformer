@@ -1,0 +1,8 @@
+{
+  "event_id": "0f1e2d3c4b5a69788796a5b4c3d2e1f0",
+  "user_id": 123,
+  "notif_type": "webhook_test",
+  "subject": "Vast.ai Webhook Test",
+  "message": "This is a test delivery triggered from the Vast.ai webhook test endpoint.",
+  "timestamp": 1772490123.456
+}

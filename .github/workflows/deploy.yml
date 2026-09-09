@@ -1,0 +1,86 @@
+name: Deploy
+
+# Fires when a PR is merged into main (a merge is a push to main).
+# Documentation-only changes don't redeploy.
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - '**/*.md'
+      - LICENSE
+      - .gitignore
+
+# Never let two deploys race the same CloudFormation stack.
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+permissions:
+  id-token: write # required to request the OIDC token
+  contents: read
+
+jobs:
+  deploy:
+    name: Deploy to AWS
+    runs-on: ubuntu-latest
+    # Attach required reviewers to this environment in repo settings if you
+    # ever want merges to pause for approval before deploying.
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - run: npm ci
+
+      # Re-verified here: main can contain a combination of changes that no
+      # single PR run ever tested together.
+      - run: npm run typecheck
+
+      - run: npm test
+
+      - uses: aws-actions/setup-sam@v2
+        with:
+          use-installer: true
+
+      # Mirrors ci.yml. main can hold a combination of changes no single PR run
+      # ever validated together, and this catches template breakage before the
+      # deploy step touches CloudFormation.
+      - name: Validate the SAM template
+        run: sam validate --lint
+        env:
+          AWS_DEFAULT_REGION: us-east-1
+          # `sam validate` resolves credentials even though it calls no AWS API.
+          # Deliberate placeholders, used before the real credentials are
+          # configured below.
+          AWS_ACCESS_KEY_ID: testing
+          AWS_SECRET_ACCESS_KEY: testing
+
+      # Short-lived credentials via OIDC. No long-lived AWS keys in the repo.
+      # Requires AWS_DEPLOY_ROLE_ARN — see "GitHub Actions deploys" in README.md.
+      #
+      # The region is NOT configurable here on purpose. `sam deploy` takes its
+      # region from samconfig.toml, so a workflow variable could only disagree
+      # with it -- deploying to one region while these credentials and the
+      # describe-stacks call below pointed at another. samconfig.toml is the
+      # single source of truth; change it there if the region ever moves.
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: us-east-1
+
+      - run: sam build
+
+      - name: Deploy
+        run: sam deploy --no-confirm-changeset --no-fail-on-empty-changeset
+
+      - name: Show the webhook URL
+        run: |
+          aws cloudformation describe-stacks \
+            --region us-east-1 \
+            --stack-name vast-webhook-transformer \
+            --query 'Stacks[0].Outputs[?OutputKey==`WebhookUrl`].OutputValue' \
+            --output text

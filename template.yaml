@@ -1,0 +1,142 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >-
+  Receives Vast.ai notification webhooks, verifies the HMAC signature, and
+  forwards each event to a Discord channel webhook as an embed.
+
+Parameters:
+  DiscordWebhookUrlParameterName:
+    Type: String
+    Default: /vast-webhook-transformer/discord-webhook-url
+    Description: >-
+      Name of the SSM SecureString parameter holding the Discord webhook URL.
+      Created out of band -- CloudFormation cannot create SecureString
+      parameters, and secret values must not live in this template.
+
+  VastWebhookSecretParameterName:
+    Type: String
+    Default: /vast-webhook-transformer/vast-webhook-secret
+    Description: >-
+      Name of the SSM SecureString parameter holding the Vast webhook_secret
+      used as the HMAC key. Also created out of band.
+
+  LogRetentionInDays:
+    Type: Number
+    Default: 14
+    Description: CloudWatch Logs retention. Without this, logs are kept forever.
+
+  ThrottlingRateLimit:
+    Type: Number
+    Default: 2
+    Description: >-
+      Steady-state requests/second for the public endpoint. Expected traffic is
+      a handful of deliveries a day, so this is generous; its real job is to
+      bound the bill if the endpoint gets scanned.
+
+  ThrottlingBurstLimit:
+    Type: Number
+    Default: 5
+    Description: Burst capacity above the steady-state rate.
+
+  ReservedConcurrency:
+    Type: Number
+    Default: 5
+    Description: >-
+      Hard ceiling on concurrent executions. A second, independent backstop on
+      the bill: the API Gateway throttle bounds the request rate, this bounds
+      what the function can spend even if that throttle is misconfigured.
+      Expected traffic is a few deliveries a day, so it cannot constrain real
+      use. Note it also reserves this much from the account concurrency pool.
+
+Globals:
+  Function:
+    Runtime: nodejs24.x
+    Architectures:
+      - arm64
+    # Vast gives up on a delivery after 10s, so there is no value in running
+    # longer than that -- the client is already gone.
+    Timeout: 10
+    MemorySize: 256
+
+Resources:
+  WebhookApi:
+    Type: AWS::Serverless::HttpApi
+    Properties:
+      # $default keeps the URL free of a stage prefix.
+      StageName: $default
+      DefaultRouteSettings:
+        ThrottlingRateLimit: !Ref ThrottlingRateLimit
+        ThrottlingBurstLimit: !Ref ThrottlingBurstLimit
+
+  WebhookFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Format: esm
+        Target: node24
+        Minify: true
+        Sourcemap: false
+        # Lambda resolves `handler.handler` to handler.mjs, which is what makes
+        # an ESM bundle work.
+        OutExtension:
+          - .js=.mjs
+        EntryPoints:
+          - src/handler.ts
+    Properties:
+      Handler: handler.handler
+      Description: Transforms Vast.ai notification webhooks into Discord embeds.
+      ReservedConcurrentExecutions: !Ref ReservedConcurrency
+      Environment:
+        Variables:
+          # Only the parameter NAMES are here. The secret values are never part
+          # of the function configuration, which any principal holding
+          # lambda:GetFunction could otherwise read.
+          DISCORD_WEBHOOK_URL_PARAMETER: !Ref DiscordWebhookUrlParameterName
+          VAST_WEBHOOK_SECRET_PARAMETER: !Ref VastWebhookSecretParameterName
+      Policies:
+        - Statement:
+            - Sid: ReadWebhookSecrets
+              Effect: Allow
+              Action: ssm:GetParameters
+              Resource:
+                - !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${DiscordWebhookUrlParameterName}
+                - !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${VastWebhookSecretParameterName}
+            - Sid: DecryptWebhookSecrets
+              Effect: Allow
+              Action: kms:Decrypt
+              # Scoped so the key can only be used through Parameter Store, not
+              # directly. Covers the AWS-managed alias/aws/ssm key and a
+              # customer-managed key alike.
+              Resource: !Sub arn:${AWS::Partition}:kms:${AWS::Region}:${AWS::AccountId}:key/*
+              Condition:
+                StringEquals:
+                  kms:ViaService: !Sub ssm.${AWS::Region}.amazonaws.com
+      Events:
+        Webhook:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref WebhookApi
+            Path: /webhook
+            Method: POST
+
+  # Declared explicitly so retention is bounded. A log group created implicitly
+  # by Lambda on first invocation never expires.
+  WebhookFunctionLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/${WebhookFunction}
+      RetentionInDays: !Ref LogRetentionInDays
+
+Outputs:
+  WebhookUrl:
+    Description: Paste this into the Vast.ai console as the webhook URL.
+    Value: !Sub https://${WebhookApi}.execute-api.${AWS::Region}.${AWS::URLSuffix}/webhook
+
+  FunctionName:
+    Description: Lambda function name, for `sam logs -n <name>`.
+    Value: !Ref WebhookFunction
+
+  LogGroupName:
+    Description: CloudWatch log group for the function.
+    Value: !Ref WebhookFunctionLogGroup

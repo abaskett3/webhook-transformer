@@ -1,0 +1,29 @@
+version = 0.1
+
+[default.global.parameters]
+stack_name = "vast-webhook-transformer"
+
+[default.build.parameters]
+cached = true
+parallel = true
+
+[default.validate.parameters]
+lint = true
+
+[default.deploy.parameters]
+capabilities = "CAPABILITY_IAM"
+resolve_s3 = true
+confirm_changeset = true
+# The single source of truth for the deploy region, for local runs and CI
+# alike. deploy.yml intentionally hardcodes the same value rather than taking a
+# workflow variable, because `sam deploy` reads the region from here and the two
+# could otherwise disagree. Change the region in both places or neither.
+region = "us-east-1"
+
+[default.local_start_api.parameters]
+# Values come from env.json (gitignored). See .env.example.
+env_vars = "env.json"
+port = 3000
+
+[default.local_invoke.parameters]
+env_vars = "env.json"

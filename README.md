@@ -264,8 +264,13 @@ CloudFormation, S3, Lambda, API Gateway, and Logs actions `sam deploy` uses.
 
 ```bash
 gh secret set AWS_DEPLOY_ROLE_ARN --body 'arn:aws:iam::<ACCOUNT_ID>:role/gha-vast-webhook-deploy'
-gh variable set AWS_REGION --body 'us-east-1'    # optional; defaults to us-east-1
 ```
+
+The region is not a workflow variable. `sam deploy` reads it from
+[samconfig.toml](samconfig.toml), so a variable could only ever disagree with the deploy itself —
+authenticating against one region while the stack went to another. To move regions, change
+`samconfig.toml` and the two `us-east-1` literals in
+[deploy.yml](.github/workflows/deploy.yml) together.
 
 To make merges pause for approval before deploying, add required reviewers to the `production`
 environment in **Settings → Environments**.
@@ -328,7 +333,10 @@ aws budgets create-budget --account-id <ACCOUNT_ID> \
 | `500` on every delivery | SSM parameter missing/misnamed, or the execution role lacks `ssm:GetParameters` / `kms:Decrypt`. Check the `config unavailable` log line. |
 | `204` but no Discord message | Discord rejected the payload. Look for `discord delivery failed` with `discord_status` in the logs. |
 | Discord returns `400` | Usually an embed limit. The 6000-character total across title + description + footer is the one that bites; the transformer caps it, so this suggests a bug worth reporting. |
-| Duplicate Discord messages | Expected. Vast delivers at least once and there's no dedup store. |
+| Duplicate Discord messages | Expected. Vast delivers at least once and there's no dedup store. Vast sends `X-Vast-Event-Id` and recommends deduplicating on it; this service deliberately doesn't. A captured request replayed within the 300s signature window produces a duplicate too. |
+| `client:` and `host:` events look identical | The payload's `notif_type` is the short slug with no context prefix, so the two are indistinguishable in the embed. Vast's fix is a dedicated webhook per context — subscribe a second webhook and point it at a different Discord channel. |
+| Deliveries stop after changing the endpoint URL | Redirects count as *permanent* delivery failures. Update the URL in the Vast console rather than redirecting the old one. |
+| A message arrives with no timestamp | The payload's `timestamp` was outside years 0000-9999, so the embed field was omitted rather than sending a date Discord would reject. |
 
 Logs are one structured JSON line per request. The notification's subject and message are
 deliberately omitted — they're the content of the alert itself.

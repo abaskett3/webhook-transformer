@@ -1,0 +1,8 @@
+{
+  "event_id": "7e9a2c4e6f9e4a24a53b77c2d8e3f0aa",
+  "user_id": 123,
+  "notif_type": "low_credit",
+  "subject": "Warning - Your Vast.ai Credit Balance Is Getting Low",
+  "message": "Your Vast.ai balance is below your configured threshold.",
+  "timestamp": 1772490000.123
+}

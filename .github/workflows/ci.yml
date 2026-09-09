@@ -1,0 +1,53 @@
+name: CI
+
+# Runs when a PR is opened and on every push to that PR's branch.
+# Documentation-only changes are skipped.
+on:
+  pull_request:
+    paths-ignore:
+      - '**/*.md'
+      - LICENSE
+      - .gitignore
+
+concurrency:
+  group: ci-${{ github.head_ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Typecheck, test, build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - run: npm ci
+
+      - run: npm run typecheck
+
+      - run: npm test
+
+      - uses: aws-actions/setup-sam@v2
+        with:
+          use-installer: true
+
+      - name: Validate the SAM template
+        run: sam validate --lint
+        env:
+          AWS_DEFAULT_REGION: us-east-1
+          # `sam validate` resolves credentials even though it calls no AWS API.
+          # These are deliberate placeholders — this job never touches AWS and
+          # has no permission to.
+          AWS_ACCESS_KEY_ID: testing
+          AWS_SECRET_ACCESS_KEY: testing
+
+      # Catches esbuild/bundling breakage that typecheck and tests miss.
+      - name: Build
+        run: sam build

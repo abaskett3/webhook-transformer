@@ -1,0 +1,25 @@
+{
+  "name": "vast-webhook-transformer",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Transforms Vast.ai notification webhook payloads into Discord webhook payloads.",
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
+    "sign": "node scripts/sign-payload.ts"
+  },
+  "dependencies": {
+    "@aws-sdk/client-ssm": "^3.1128.0"
+  },
+  "devDependencies": {
+    "@types/aws-lambda": "^8.10.163",
+    "@types/node": "^26.5.0",
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.0"
+  }
+}
