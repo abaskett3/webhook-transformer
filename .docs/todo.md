@@ -58,22 +58,20 @@ notification content in logs); all YAML parses.
 ## Source control (step 7 — gated)
 
 - [x] `git init` — done; remote is `git@github.com:abaskett3/webhook-transformer.git`
-- [ ] **Rename the branch: `git branch -m master main`.** Currently on `master`, but
-      `deploy.yml` triggers on `main` and the OIDC trust policy pins `refs/heads/main`. Push as-is
-      and no CI runs, no deploy fires, and the deploy role can't be assumed. Cheap now, annoying
-      later.
-- [ ] Commit the rest of the tree — only `.gitignore`, `CLAUDE.md`, and `README.md` are committed
-      so far; everything else is still untracked
-- [ ] Confirm the GitHub repo is **private**
-- [ ] Push
-- [ ] Set up OIDC for deploys (full walkthrough in the README):
-  - [ ] `aws iam create-open-id-connect-provider` (no thumbprint needed — AWS verifies GitHub's
-        JWKS TLS cert against its trusted root CA library)
-  - [ ] Create `gha-vast-webhook-deploy` role with the trust policy pinned to
-        `repo:<user>/vast-webhook-transformer:ref:refs/heads/main`
-  - [ ] Attach deploy permissions
-  - [ ] `gh secret set AWS_DEPLOY_ROLE_ARN`
-  - [ ] Optionally `gh variable set AWS_REGION`
+- [x] Renamed `master` → `main`, locally and on the remote; GitHub default branch flipped to match
+- [x] Committed the rest of the tree and pushed
+- [x] Confirmed the GitHub repo is **private**
+- [x] Set up OIDC for deploys — role is named `gh-vast-webhook-deploy` (not `gha-`), trust policy
+      pinned to the `production` environment claim. See "One-time OIDC setup for deploys" in the
+      README for the full walkthrough and the two gotchas hit getting it working:
+  - The job's `environment: production` means the `sub` claim is
+    `repo:OWNER/REPO:environment:production`, not `repo:OWNER/REPO:ref:refs/heads/main`.
+  - This repo was created after GitHub's July 15, 2026 change to immutable-ID `sub` claims for new
+    repos, so the real working value embeds numeric IDs:
+    `repo:abaskett3@10681302/webhook-transformer@1362037256:environment:production`.
+  - `AWS_DEPLOY_ROLE_ARN` is set via `gh secret set`. `gh variable set AWS_REGION` was never done —
+    the region was deliberately kept out of workflow variables (see "region single-sourcing" in the
+    README) rather than added as one.
 
 ## Flagged — read before acting
 
