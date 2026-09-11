@@ -83,6 +83,16 @@ Resources:
           - .js=.mjs
         EntryPoints:
           - src/handler.ts
+        # @aws-sdk/client-ssm's transport layer does a CJS `require('node:https')`
+        # internally; esbuild can't convert that to an ESM import when bundling,
+        # so it emits a runtime shim that throws "Dynamic require of ... is not
+        # supported" at cold start. This restores a working `require` for it.
+        # Undocumented by AWS's SAM docs, but a real esbuild option --
+        # aws-lambda-builders forwards arbitrary BuildProperties keys straight
+        # through to esbuild rather than restricting to a curated list.
+        # https://github.com/aws/aws-sam-cli/issues/4827
+        Banner:
+          - js=import { createRequire } from 'module'; const require = createRequire(import.meta.url);
     Properties:
       Handler: handler.handler
       Description: Transforms Vast.ai notification webhooks into Discord embeds.
